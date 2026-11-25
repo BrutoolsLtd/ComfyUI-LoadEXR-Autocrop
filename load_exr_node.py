@@ -69,7 +69,18 @@ def load_exr_pixels(filepath):
     )
 
     if data_window != display_window:
-        buf = oiio.ImageBufAlgo.crop(buf, spec.display_window)
+        x, y, width, height = display_window
+        display_roi = oiio.ROI(x, 
+                               x + width,
+                               y,
+                               y + height,
+                               0, 
+                               1,
+                               0,
+                               spec.nchannels,
+                               )
+
+        buf = oiio.ImageBufAlgo.crop(buf, display_roi)
 
     pixels = buf.get_pixels().astype(np.float32)
 
