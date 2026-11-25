@@ -1,6 +1,12 @@
+"""Load EXR images and frame sequences as ComfyUI IMAGE/MASK batches.
+
+The OpenImageIO path requires channels named R, G, B, A and crops to the
+Display Window when it differs from the Data Window. The OpenCV path reads
+without that crop.
+"""
+
 import os
 from tqdm import tqdm
-
 
 os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
 
@@ -14,11 +20,13 @@ from comfy.utils import PROGRESS_BAR_ENABLED, ProgressBar
 
 
 def linearToSRGB(npArray):
+    """Apply the linear-to-sRGB transfer function to an array in place."""
     less = npArray <= 0.0031308
     npArray[less] = npArray[less] * 12.92
     npArray[~less] = np.power(npArray[~less], 1/2.4) * 1.055 - 0.055
 
 def oiio_to_cv_channel_order(pixels):
+    """Convert an HWC RGB(A) array to OpenCV BGR(A) channel order."""
     if pixels.ndim != 3 or pixels.shape[2] not in (3, 4):
         raise ValueError(
             f"Se esperaba una imagen RGB o RGBA; se recibió la forma {pixels.shape}"
@@ -28,6 +36,7 @@ def oiio_to_cv_channel_order(pixels):
     return pixels[..., order].copy()
 
 def validate_oiio_rgba_channels(channel_names, filepath):
+    """Require R, G, B, A channels in that order, ignoring letter case."""
     expected = ("r", "g", "b", "a")
     actual = tuple(name.casefold() for name in channel_names)
 
@@ -38,6 +47,11 @@ def validate_oiio_rgba_channels(channel_names, filepath):
         )
 
 def load_exr_pixels(filepath):
+    """Read an EXR with OpenImageIO, crop to its Display Window if needed,
+    and return float32 pixels in BGR(A) order.
+
+    The file must have channels named R, G, B, A.
+    """
     buf = oiio.ImageBuf(filepath)
     if buf.nchannels == 0:
         raise ValueError(f"No se pudo cargar el EXR: {filepath}")
@@ -62,6 +76,11 @@ def load_exr_pixels(filepath):
     return oiio_to_cv_channel_order(pixels)
 
 def load_EXR(filepath, tonemap, auto_crop):
+    """Load one EXR and return batched RGB and mask tensors.
+
+    RGB has shape [1, H, W, 3]. The mask contains the clipped alpha channel,
+    or zeros if the selected reader returns no alpha channel.
+    """
     if auto_crop:
         image = load_exr_pixels(filepath)
     else:
@@ -104,6 +123,13 @@ class LoadEXRAutoCrop:
                 "auto_crop": ("BOOLEAN", {"default": True, "label_on": "True (Crop to DisplayWindow)", "label_off": "False (Use DataWindow)"}),
             },
         }
+    
+    DESCRIPTION = (
+        "Loads one EXR or a numbered EXR sequence as IMAGE and MASK batches. "
+        "Auto Crop uses OpenImageIO, requires channels named R, G, B, A, and "
+        "crops to the Display Window when it differs from the Data Window. "
+        "With Auto Crop disabled, OpenCV reads the EXR without that crop."
+    )
 
     CATEGORY = "folks/HQ-Image-Save"
 
