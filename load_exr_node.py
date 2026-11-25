@@ -2,7 +2,7 @@ import os
 from tqdm import tqdm
 
 
-
+os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
 
 import cv2 as cv
 import torch
@@ -18,12 +18,34 @@ def linearToSRGB(npArray):
     npArray[less] = npArray[less] * 12.92
     npArray[~less] = np.power(npArray[~less], 1/2.4) * 1.055 - 0.055
 
+def oiio_to_cv_channel_order(pixels):
+    if pixels.ndim != 3 or pixels.shape[2] not in (3, 4):
+        raise ValueError(
+            f"Se esperaba una imagen RGB o RGBA; se recibió la forma {pixels.shape}"
+        )
+
+    order = [2, 1, 0, 3] if pixels.shape[2] == 4 else [2, 1, 0]
+    return pixels[..., order].copy()
+
+def validate_oiio_rgba_channels(channel_names, filepath):
+    expected = ("r", "g", "b", "a")
+    actual = tuple(name.casefold() for name in channel_names)
+
+    if actual != expected:
+        raise ValueError(
+            f"EXR con canales inesperados: {filepath}. "
+            f"Se esperaba RGBA; se encontró {channel_names}"
+        )
+
 def load_exr_pixels(filepath):
     buf = oiio.ImageBuf(filepath)
     if buf.nchannels == 0:
         raise ValueError(f"No se pudo cargar el EXR: {filepath}")
 
     spec = buf.spec()
+
+    validate_oiio_rgba_channels(spec.channelnames, filepath)
+
     data_window = (spec.x, spec.y, spec.width, spec.height)
     display_window = (
         spec.full_x,
@@ -35,13 +57,18 @@ def load_exr_pixels(filepath):
     if data_window != display_window:
         buf = oiio.ImageBufAlgo.crop(buf, spec.display_window)
 
-    return buf.get_pixels().astype(np.float32)
+    pixels = buf.get_pixels().astype(np.float32)
+
+    return oiio_to_cv_channel_order(pixels)
 
 def load_EXR(filepath, tonemap, auto_crop):
     if auto_crop:
         image = load_exr_pixels(filepath)
     else:
-        image = cv.imread(filepath, cv.IMREAD_UNCHANGED).astype(np.float32)
+        image = cv.imread(filepath, cv.IMREAD_UNCHANGED)
+        if image is None:
+            raise ValueError(f"Not able to read EXR file: {filepath}")
+        image = image.astype(np.float32, copy=False)
 
     if len(image.shape) == 2:
         image = np.repeat(image[..., np.newaxis], 3, axis=2)
@@ -108,7 +135,7 @@ class LoadEXRAutoCrop:
             for frame in tqdm(frames, desc="loading images"):
                 framepath = os.path.normpath(filepath.replace("%04d", f"{frame:04}"))
                 if os.path.exists(framepath):
-                    rgbFrame, maskFrame = load_EXR(framepath, tonemap)
+                    rgbFrame, maskFrame = load_EXR(framepath, tonemap, auto_crop)
                     rgb.append(rgbFrame)
                     mask.append(maskFrame)
                 else:
